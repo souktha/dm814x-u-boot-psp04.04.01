@@ -1,0 +1,466 @@
+--- u-boot-2010.06-psp04.04.00.01/drivers/block/ahci.c	2012-03-22 22:10:52.000000000 -0700
++++ u-boot-2010.06-psp04.04.00.01-patched/drivers/block/ahci.c	2016-05-09 19:27:47.902369306 -0700
+@@ -37,6 +37,7 @@
+ #include <linux/ctype.h>
+ #include <ahci.h>
+ 
++
+ struct ahci_probe_ent *probe_ent = NULL;
+ hd_driveid_t *ataid[AHCI_MAX_PORTS];
+ 
+@@ -78,13 +79,15 @@ static int waiting_for_cmd_completed(vol
+ 
+ static int ahci_host_init(struct ahci_probe_ent *probe_ent)
+ {
++#ifndef CONFIG_SCSI_AHCI_PLAT
+ 	pci_dev_t pdev = probe_ent->dev;
+-	volatile u8 *mmio = (volatile u8 *)probe_ent->mmio_base;
+-	u32 tmp, cap_save;
+ 	u16 tmp16;
++	unsigned short vendor;
++#endif	
++	volatile u8 *mmio = (volatile u8 *)probe_ent->mmio_base;
++	u32 tmp, cap_save,cmd;
+ 	int i, j;
+ 	volatile u8 *port_mmio;
+-	unsigned short vendor;
+ 
+ 	cap_save = readl(mmio + HOST_CAP);
+ 	cap_save &= ((1 << 28) | (1 << 17));
+@@ -110,6 +113,7 @@ static int ahci_host_init(struct ahci_pr
+ 	writel(cap_save, mmio + HOST_CAP);
+ 	writel_with_flush(0xf, mmio + HOST_PORTS_IMPL);
+ 
++#ifndef CONFIG_SCSI_AHCI_PLAT
+ 	pci_read_config_word(pdev, PCI_VENDOR_ID, &vendor);
+ 
+ 	if (vendor == PCI_VENDOR_ID_INTEL) {
+@@ -118,7 +122,7 @@ static int ahci_host_init(struct ahci_pr
+ 		tmp16 |= 0xf;
+ 		pci_write_config_word(pdev, 0x92, tmp16);
+ 	}
+-
++#endif
+ 	probe_ent->cap = readl(mmio + HOST_CAP);
+ 	probe_ent->port_map = readl(mmio + HOST_PORTS_IMPL);
+ 	probe_ent->n_ports = (probe_ent->cap & 0x1f) + 1;
+@@ -126,6 +130,9 @@ static int ahci_host_init(struct ahci_pr
+ 	debug("cap 0x%x  port_map 0x%x  n_ports %d\n",
+ 	      probe_ent->cap, probe_ent->port_map, probe_ent->n_ports);
+ 
++	if (probe_ent->n_ports > CONFIG_SYS_SCSI_MAX_SCSI_ID)
++		probe_ent->n_ports = CONFIG_SYS_SCSI_MAX_SCSI_ID;
++
+ 	for (i = 0; i < probe_ent->n_ports; i++) {
+ 		probe_ent->port[i].port_mmio = ahci_port_base((u32) mmio, i);
+ 		port_mmio = (u8 *) probe_ent->port[i].port_mmio;
+@@ -144,7 +151,7 @@ static int ahci_host_init(struct ahci_pr
+ 			 */
+ 			msleep(500);
+ 		}
+-
++		
+ 		writel(PORT_CMD_SPIN_UP, port_mmio + PORT_CMD);
+ 
+ 		j = 0;
+@@ -184,21 +191,24 @@ static int ahci_host_init(struct ahci_pr
+ 	tmp = readl(mmio + HOST_CTL);
+ 	debug("HOST_CTL 0x%x\n", tmp);
+ 
++#ifndef CONFIG_SCSI_AHCI_PLAT
+ 	pci_read_config_word(pdev, PCI_COMMAND, &tmp16);
+ 	tmp |= PCI_COMMAND_MASTER;
+ 	pci_write_config_word(pdev, PCI_COMMAND, tmp16);
+-
++#endif
+ 	return 0;
+ }
+ 
+ 
+ static void ahci_print_info(struct ahci_probe_ent *probe_ent)
+ {
++#ifndef CONFIG_SCSI_AHCI_PLAT
+ 	pci_dev_t pdev = probe_ent->dev;
++	u16 cc;
++#endif	
+ 	volatile u8 *mmio = (volatile u8 *)probe_ent->mmio_base;
+ 	u32 vers, cap, impl, speed;
+ 	const char *speed_s;
+-	u16 cc;
+ 	const char *scc_s;
+ 
+ 	vers = readl(mmio + HOST_VERSION);
+@@ -213,6 +223,9 @@ static void ahci_print_info(struct ahci_
+ 	else
+ 		speed_s = "?";
+ 
++#ifdef CONFIG_SCSI_AHCI_PLAT
++	scc_s = "SATA";
++#else	
+ 	pci_read_config_word(pdev, 0x0a, &cc);
+ 	if (cc == 0x0101)
+ 		scc_s = "IDE";
+@@ -222,7 +235,7 @@ static void ahci_print_info(struct ahci_
+ 		scc_s = "RAID";
+ 	else
+ 		scc_s = "unknown";
+-
++#endif
+ 	printf("AHCI %02x%02x.%02x%02x "
+ 	       "%u slots %u ports %s Gbps 0x%x impl %s mode\n",
+ 	       (vers >> 24) & 0xff,
+@@ -249,6 +262,7 @@ static void ahci_print_info(struct ahci_
+ 	       cap & (1 << 13) ? "part " : "");
+ }
+ 
++#ifndef CONFIG_SCSI_AHCI_PLAT
+ static int ahci_init_one(pci_dev_t pdev)
+ {
+ 	u16 vendor;
+@@ -291,7 +305,7 @@ static int ahci_init_one(pci_dev_t pdev)
+       err_out:
+ 	return rc;
+ }
+-
++#endif
+ 
+ #define MAX_DATA_BYTE_COUNT  (4*1024*1024)
+ 
+@@ -332,7 +346,7 @@ static void ahci_fill_cmd_slot(struct ah
+ 	pp->cmd_slot->tbl_addr_hi = 0;
+ }
+ 
+-
++#ifdef CONFIG_AHCI_SETFEATURES_XFER
+ static void ahci_set_feature(u8 port)
+ {
+ 	struct ahci_ioports *pp = &(probe_ent->port[port]);
+@@ -357,7 +371,7 @@ static void ahci_set_feature(u8 port)
+ 		printf("set feature error!\n");
+ 	}
+ }
+-
++#endif
+ 
+ static int ahci_port_start(u8 port)
+ {
+@@ -453,7 +467,7 @@ static int get_ahci_device_data(u8 port,
+ 
+ 	writel_with_flush(1, port_mmio + PORT_CMD_ISSUE);
+ 
+-	if (waiting_for_cmd_completed(port_mmio + PORT_CMD_ISSUE, 150, 0x1)) {
++	if (waiting_for_cmd_completed(port_mmio + PORT_CMD_ISSUE, 1500, 0x1)) {
+ 		printf("timeout exit!\n");
+ 		return -1;
+ 	}
+@@ -468,7 +482,7 @@ static char *ata_id_strcpy(u16 *target,
+ {
+ 	int i;
+ 	for (i = 0; i < len / 2; i++)
+-		target[i] = le16_to_cpu(src[i]);
++		target[i] = swab16(src[i]);
+ 	return (char *)target;
+ }
+ 
+@@ -574,7 +588,7 @@ static int ata_scsiop_read10(ccb * pccb)
+ 	/* Construct the FIS */
+ 	fis[0] = 0x27;		/* Host to device FIS. */
+ 	fis[1] = 1 << 7;	/* Command FIS. */
+-	fis[2] = ATA_CMD_RD_DMA;	/* Command byte. */
++	fis[2] = ATA_CMD_READ_EXT; //ATA_CMD_RD_DMA; /* Command byte. */
+ 
+ 	/* LBA address, only support LBA28 in this driver */
+ 	fis[4] = pccb->cmd[5];
+@@ -603,6 +617,7 @@ static int ata_scsiop_read10(ccb * pccb)
+ static int ata_scsiop_read_capacity10(ccb *pccb)
+ {
+ 	u32 cap;
++	u32 block_size;
+ 
+ 	if (!ataid[pccb->target]) {
+ 		printf("scsi_ahci: SCSI READ CAPACITY10 command failure. "
+@@ -612,11 +627,20 @@ static int ata_scsiop_read_capacity10(cc
+ 	}
+ 
+ 	cap = le32_to_cpu(ataid[pccb->target]->lba_capacity);
++	if (cap == 0xfffffff) {
++		unsigned short *cap48 = ataid[pccb->target]->lba48_capacity;
++		if (cap48[2] || cap48[3]) {
++			cap = 0xffffffff;
++		} else {
++			cap = (le16_to_cpu(cap48[1]) << 16) |
++			      (le16_to_cpu(cap48[0]));
++		}
++	}
++	cap = cpu_to_be32(cap);
+ 	memcpy(pccb->pdata, &cap, sizeof(cap));
+ 
+-	pccb->pdata[4] = pccb->pdata[5] = 0;
+-	pccb->pdata[6] = 512 >> 8;
+-	pccb->pdata[7] = 512 & 0xff;
++	block_size = cpu_to_be32((u32)512);
++	memcpy(&pccb->pdata[4], &block_size, 4);
+ 
+ 	return 0;
+ }
+@@ -666,8 +690,51 @@ void scsi_low_level_init(int busdevfunc)
+ {
+ 	int i;
+ 	u32 linkmap;
+-
++#ifndef CONFIG_SCSI_AHCI_PLAT
+ 	ahci_init_one(busdevfunc);
++#endif
++	linkmap = probe_ent->link_port_map;
++
++	for (i = 0; i < CONFIG_SYS_SCSI_MAX_SCSI_ID; i++) {
++		if (((linkmap >> i) & 0x01)) {
++			if (ahci_port_start((u8) i)) {
++				printf("Can not start port %d\n", i);
++				continue;
++			}
++#ifdef CONFIG_AHCI_SETFEATURES_XFER
++			ahci_set_feature((u8) i);
++#endif			
++		}
++	}
++}
++
++#ifdef CONFIG_SCSI_AHCI_PLAT
++int ahci_init(u32 base)
++{
++	int i, rc = 0;
++	u32 linkmap;
++
++	memset(ataid, 0, sizeof(ataid));
++
++	probe_ent = malloc(sizeof(struct ahci_probe_ent));
++	memset(probe_ent, 0, sizeof(struct ahci_probe_ent));
++
++	probe_ent->host_flags = ATA_FLAG_SATA
++				| ATA_FLAG_NO_LEGACY
++				| ATA_FLAG_MMIO
++				| ATA_FLAG_PIO_DMA
++				| ATA_FLAG_NO_ATAPI;
++	probe_ent->pio_mask = 0x1f;
++	probe_ent->udma_mask = 0x7f;	/*Fixme,assume to support UDMA6 */
++
++	probe_ent->mmio_base = base;
++
++	/* initialize adapter */
++	rc = ahci_host_init(probe_ent);
++	if (rc)
++		goto err_out;
++
++	ahci_print_info(probe_ent);
+ 
+ 	linkmap = probe_ent->link_port_map;
+ 
+@@ -677,10 +744,15 @@ void scsi_low_level_init(int busdevfunc)
+ 				printf("Can not start port %d\n", i);
+ 				continue;
+ 			}
++#ifdef CONFIG_AHCI_SETFEATURES_XFER
+ 			ahci_set_feature((u8) i);
++#endif
+ 		}
+ 	}
++err_out:
++	return rc;
+ }
++#endif
+ 
+ 
+ void scsi_bus_reset(void)
+diff -uprN -X dontdiff u-boot-2010.06-psp04.04.00.01/board/ti/ti8148/evm.c u-boot-2010.06-psp04.04.00.01-patched/board/ti/ti8148/evm.c
+--- u-boot-2010.06-psp04.04.00.01/board/ti/ti8148/evm.c	2012-10-10 01:35:07.000000000 -0700
++++ u-boot-2010.06-psp04.04.00.01-patched/board/ti/ti8148/evm.c	2016-05-09 20:03:18.998237484 -0700
+@@ -36,6 +36,9 @@
+ #define __raw_readw(a)		(*(volatile unsigned short *)(a))
+ #define __raw_writew(v, a)	(*(volatile unsigned short *)(a) = (v))
+ #endif
++#if defined (CONFIG_SCSI_AHCI)
++extern int ahci_init(u32 base);
++#endif	
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -261,6 +264,10 @@ int misc_init_r (void)
+ 	}
+ 	printf("\n");
+ 	#endif
++
++	#if defined (CONFIG_SCSI_AHCI)
++	ahci_init(0x4a140000);
++	#endif
+ 	return 0;
+ }
+ 
+@@ -523,29 +530,79 @@ static void pcie_pll_config()
+ }
+ #endif
+ 
++#define SATA_BASE_ADDR 			0x4A140000
++#define TI814X_SATA_PHY_CFGRX0_VAL	0x008FCC22
++#define TI814X_SATA_PHY_CFGRX1_VAL	0x008E0500
++#define TI814X_SATA_PHY_CFGRX2_VAL	0x7BDEF000
++#define TI814X_SATA_PHY_CFGRX3_VAL	0x1F180B0F
++#define TI814X_SATA_PHY_CFGTX0_VAL	0x01003622
++#define TI814X_SATA_PHY_CFGTX1_VAL	0x40000002
++#define TI814X_SATA_PHY_CFGTX2_VAL	0x00C201F8
++#define TI814X_SATA_PHY_CFGTX3_VAL	0x073CE39E
++
++#define SATA_PHY_CFGRX0	(0x1104 + SATA_BASE_ADDR)
++#define SATA_PHY_CFGRX1	(0x1108 + SATA_BASE_ADDR)
++#define SATA_PHY_CFGRX2	(0x110c + SATA_BASE_ADDR)
++#define SATA_PHY_CFGRX3	(0x1110 + SATA_BASE_ADDR)
++#define SATA_PHY_CFGTX0	(0x111c + SATA_BASE_ADDR)
++#define SATA_PHY_CFGTX1	(0x1120 + SATA_BASE_ADDR)
++#define SATA_PHY_CFGTX2	(0x1124 + SATA_BASE_ADDR)
++#define SATA_PHY_CFGTX3	(0x1128 + SATA_BASE_ADDR)
++
++
++static void sata_phy_config(void)
++{
++	__raw_writel(TI814X_SATA_PHY_CFGRX0_VAL, SATA_PHY_CFGRX0);
++	__raw_writel(TI814X_SATA_PHY_CFGRX1_VAL, SATA_PHY_CFGRX1);
++	__raw_writel(TI814X_SATA_PHY_CFGRX2_VAL, SATA_PHY_CFGRX2);
++	__raw_writel(TI814X_SATA_PHY_CFGRX3_VAL, SATA_PHY_CFGRX3);
++
++	__raw_writel(TI814X_SATA_PHY_CFGTX0_VAL, SATA_PHY_CFGTX0);
++	__raw_writel(TI814X_SATA_PHY_CFGTX1_VAL, SATA_PHY_CFGTX1);
++	__raw_writel(TI814X_SATA_PHY_CFGTX2_VAL, SATA_PHY_CFGTX2);
++	__raw_writel(TI814X_SATA_PHY_CFGTX3_VAL, SATA_PHY_CFGTX3);
++}
++
++
+ static void sata_pll_config()
+ {
+-	__raw_writel(0xC12C003C, SATA_PLLCFG1);
++	int i;
++
++	/* use 100MHZ low jitter clock feed */
++	__raw_writel(0x00000004, SATA_PLLCFG0);
++	for(i=0; i < 4; i++)delay(0xFFFF);
++
++	__raw_writel(0x812C003C, SATA_PLLCFG1);
++	for(i=0; i < 10; i++)delay(0xFFFF);
++
+ 	__raw_writel(0x004008E0, SATA_PLLCFG3);
+-	delay(0xFFFF);
++	for(i=0; i < 10; i++)delay(0xFFFF);
+ 
+-	__raw_writel(0x80000004, SATA_PLLCFG0);
+-	delay(0xFFFF);
++	__raw_writel(0x00000014, SATA_PLLCFG0);
++	for(i=0; i < 8; i++)delay(0xFFFF);
+ 
+ 	/* Enable PLL LDO */
+-	__raw_writel(0x80000014, SATA_PLLCFG0);
+-	delay(0xFFFF);
++	__raw_writel(0x00000016, SATA_PLLCFG0);
++	for(i=0; i < 6; i++)delay(0xFFFF);
+ 
+ 	/* Enable DIG LDO, ENBGSC_REF, PLL LDO */
+-	__raw_writel(0x80000016, SATA_PLLCFG0);
+-	delay(0xFFFF);
+-
+-	__raw_writel(0xC0000017, SATA_PLLCFG0);
+-	delay(0xFFFF);
++	__raw_writel(0x40000016, SATA_PLLCFG0);
++	for(i=0; i < 10; i++)delay(0xFFFF);
+ 
++	__raw_writel(0x40007077, SATA_PLLCFG0);
++	for(i=0; i < 4; i++)delay(0xFFFF);
+ 	/* wait for ADPLL lock */
+-	while(((__raw_readl(SATA_PLLSTATUS) & 0x01) == 0x0));
++	while(((__raw_readl(SATA_PLLSTATUS) & 0x01) == 0x0))delay(0xffff);
++
++	__raw_writel( 2, 0x48180560); /* ALWON2_SATA_CLKCTRL */
++	for(i=0; i < 8; i++)delay(0xFFFF);
++	while(((__raw_readl(0x48180560) & 0x0f) != 0x2))delay(0xffff);
++
++	__raw_writel( 2, 0x48180504); /*CM_DEFAULT_L2_MED_CLKSTCTRL */
++	for(i=0; i < 8; i++)delay(0xFFFF);
++	while(((__raw_readl(0x48180504) & 0x103) != 0x102))delay(0xffff);
+ 
++	sata_phy_config();
+ }
+ 
+ static void usb_pll_config()
+@@ -740,10 +797,11 @@ void prcm_init(u32 in_ddr)
+ #ifdef CONFIG_SETUP_PLL
+ 	/* Setup the various plls */
+ 	audio_pll_config();
+-	sata_pll_config();
+ #if 0
+ 	pcie_pll_config();
+ #endif
++	sata_pll_config();
++
+ 	modena_pll_config();
+ 	l3_pll_config();
+ 	ddr_pll_config();
+--- u-boot-2010.06-psp04.04.00.01/common/cmd_scsi.c	2012-03-22 22:10:52.000000000 -0700
++++ u-boot-2010.06-psp04.04.00.01-patched/common/cmd_scsi.c	2016-05-08 19:12:03.309810465 -0700
+@@ -46,7 +46,7 @@
+ #define SCSI_VEND_ID 0x10b9
+ #define SCSI_DEV_ID  0x5288
+ 
+-#else
++#elif !defined (CONFIG_SCSI_AHCI_PLAT)
+ #error no scsi device defined
+ #endif
+ 
+@@ -174,7 +174,7 @@ removable:
+ 		scsi_curr_dev = -1;
+ }
+ 
+-
++#ifdef CONFIG_PCI
+ void scsi_init(void)
+ {
+ 	int busdevfunc;
+@@ -192,6 +192,7 @@ void scsi_init(void)
+ 	scsi_low_level_init(busdevfunc);
+ 	scsi_scan(1);
+ }
++#endif
+ 
+ block_dev_desc_t * scsi_get_dev(int dev)
+ {
+--- u-boot-2010.06-psp04.04.00.01/include/configs/ti8148_evm.h	2012-10-10 01:35:07.000000000 -0700
++++ u-boot-2010.06-psp04.04.00.01-patched/include/configs/ti8148_evm.h	2016-05-09 19:59:46.524948532 -0700
+@@ -41,6 +41,7 @@
+ # define CONFIG_SETUP_PLL
+ # define CONFIG_TI814X_CONFIG_DDR
+ # define CONFIG_TI814X_EVM_DDR3
++//
+ /*
+  * # define CONFIG_TI814X_EVM_DDR2
+  */ 
+@@ -99,6 +100,7 @@
+ # define CONFIG_NAND			1
+ # define CONFIG_SPI			1
+ # define CONFIG_I2C			1
++# define CONFIG_CMD_SCSI		1
+ # define CONFIG_EXTRA_ENV_SETTINGS \
+ 	"verify=yes\0" \
+ 	"bootfile=uImage\0" \
+@@ -374,5 +376,16 @@ extern unsigned int boot_flash_type;
+ /* Unsupported features */
+ #undef CONFIG_USE_IRQ
+ 
++/*
++ * SATA driver setup
++ */
++	#ifdef CONFIG_CMD_SCSI
++		#define CONFIG_SCSI_AHCI
++		#define CONFIG_SCSI_AHCI_PLAT
++		#define CONFIG_SYS_SCSI_MAX_DEVICE 1
++		#define CONFIG_SYS_SCSI_MAX_SCSI_ID 1
++		#define CONFIG_SYS_SCSI_MAX_LUN	 1
++	#endif
++
+ #endif	  /* ! __CONFIG_TI8148_EVM_H */
+ 
